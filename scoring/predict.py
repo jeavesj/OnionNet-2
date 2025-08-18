@@ -251,4 +251,4 @@ if __name__ == "__main__":
     pred_pKa = model.predict(X_test_std).ravel()
 
     pred_df = pd.DataFrame({'name': args.name, 'pred_pKd':pred_pKa})
-    pred_df.to_csv(args.out_fpath, float_format="%.3f", index=False)
+    pred_df.to_csv(args.out_fpath, float_format="%.3f", index=False, mode='a', header=False)
