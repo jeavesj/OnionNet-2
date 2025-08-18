@@ -227,6 +227,8 @@ if __name__ == "__main__":
                         help="Input. The total number of shells.")
     parser.add_argument("-out_fpath", type=str, default="predicted_pKd.csv",
                         help="Output. The predicted pKa of the complex on the test set.")
+    parser.add_argument("-name", type=str, default='',
+                        help="Sample identifier (e.g., the pdb id).")
     args = parser.parse_args()
     rec_fpath = args.rec_fpath
     lig_fpath = args.lig_fpath
@@ -248,5 +250,5 @@ if __name__ == "__main__":
 
     pred_pKa = model.predict(X_test_std).ravel()
 
-    pred_df = pd.DataFrame(pred_pKa, columns=['pred_pKd'])
-    pred_df.to_csv(args.out_fpath, float_format="%.3f")
+    pred_df = pd.DataFrame({'name': args.name, 'pred_pKd':pred_pKa})
+    pred_df.to_csv(args.out_fpath, float_format="%.3f", index=False)
