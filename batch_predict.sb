@@ -1,9 +1,10 @@
 #!/bin/bash --login
 #SBATCH --job-name=OnionNet2
-#SBATCH --time=3:00:00
+#SBATCH --time=1:00:00
 #SBATCH --cpus-per-task=1
 #SBATCH --gpus=h200:1
 #SBATCH --mem=2G
+#SBATCH --array=0-283%50
 
 module purge
 module load Miniforge3
@@ -13,5 +14,6 @@ conda activate onionnet2
 
 INPUT_CSV=/mnt/research/woldring_lab/Members/Eaves/plip-plop/index/PDBbind_v2020_core_info.csv  # Format: pdb_id,lig_id,resolution,release_year,target,prot_path,lig_path,pocket_path,source,tar_path,archive_path,score_file
 
-IFS=',' read -r pdb_id lig_id prot_path lig_path pocket_path output_dir < <(sed -n "$((SLURM_ARRAY_TASK_ID + 2))p" "$INPUT_CSV")
+IFS=',' read -r pdb_id lig_id resolution release_yr target prot_path lig_path pocket_path source tar_path archive_path score_file < <(sed -n "$((SLURM_ARRAY_TASK_ID + 2))p" "$INPUT_CSV")
 
+python3 batch_predict_cli.py --pdb_id $pdb_id --n_poses 100 

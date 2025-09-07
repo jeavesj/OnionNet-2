@@ -26,7 +26,7 @@ from Bio.PDB import PDBParser, MMCIFParser, Select, PDBIO
 # n_poses = 10
 
 ONIONNET2_INFER = '/mnt/research/woldring_lab/Members/Eaves/plip-plop/OnionNet-2/scoring/predict.py'
-RESULTS_ROOT = '/mnt/research/woldring_lab/Members/Eaves/plip-plop/results/onionnet2'
+RESULTS_ROOT = '/mnt/research/woldring_lab/Members/Eaves/plip-plop/results/onionnet2-retry'
 PROT_RES3 = {
     'ALA','ARG','ASN','ASP','CYS','GLN','GLU','GLY','HIS','ILE',
     'LEU','LYS','MET','PHE','PRO','SER','THR','TRP','TYR','VAL',
@@ -277,17 +277,42 @@ def onionnet2_predict(rec_pdb, lig_pdb, scaler, model, out_csv, name_tag):
     env.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')  # reduce TF logs
     subprocess.run(cmd, check=True, env=env)
 
-def archive_with_pose(archive_dir, pose_src_path, protein_pdb, ligand_sdf, ligand_pdb, name_tag):
+def archive_with_pose(archive_dir, pose_src_path=None, protein_pdb=None, ligand_sdf=None, ligand_pdb=None, name_tag=None):
+    if name_tag is None:
+        # fallback name when none provided
+        name_tag = os.path.splitext(os.path.basename(pose_src_path or 'pose'))[0]
     ensure_dir(archive_dir)
     tar_path = os.path.join(archive_dir, f'{name_tag}.tar.gz')
+    # open with w:gz to overwrite existing archive for idempotence
     with tarfile.open(tar_path, 'w:gz') as tf:
-        tf.add(pose_src_path, arcname=os.path.basename(pose_src_path))
-        tf.add(protein_pdb, arcname='protein_from_complex.pdb')
-        tf.add(ligand_sdf, arcname='ligand_from_complex.sdf')
-        tf.add(ligand_pdb, arcname='ligand_from_complex.pdb')
+        # pose source path
+        if pose_src_path and os.path.exists(pose_src_path):
+            try:
+                tf.add(pose_src_path, arcname=os.path.basename(pose_src_path))
+            except Exception as e:
+                print(f'[WARNING] archive add failed for pose_src_path {pose_src_path}: {e}')
+        # protein
+        if protein_pdb and os.path.exists(protein_pdb):
+            try:
+                tf.add(protein_pdb, arcname='protein_from_complex.pdb')
+            except Exception as e:
+                print(f'[WARNING] archive add failed for protein_pdb {protein_pdb}: {e}')
+        # ligand sdf (optional)
+        if ligand_sdf and os.path.exists(ligand_sdf):
+            try:
+                tf.add(ligand_sdf, arcname='ligand_from_complex.sdf')
+            except Exception as e:
+                print(f'[WARNING] archive add failed for ligand_sdf {ligand_sdf}: {e}')
+        # ligand pdb
+        if ligand_pdb and os.path.exists(ligand_pdb):
+            try:
+                tf.add(ligand_pdb, arcname='ligand_from_complex.pdb')
+            except Exception as e:
+                print(f'[WARNING] archive add failed for ligand_pdb {ligand_pdb}: {e}')
     return tar_path
 
-def process_pose(complex_path, source, name_tag, work_dir, archive_dir, pdb_id, out_csv, timings_log, scaler_fpath, model_fpath, source_tar_path=None):
+
+def process_pose(complex_path, source, name_tag, work_dir, archive_dir, pdb_id, out_csv, timings_log, scaler_fpath, model_fpath, source_tar_path=None, prot_path=None):
     tmp_cleanup = None
     use_path = complex_path
     if use_path.endswith('.gz'):
@@ -297,8 +322,34 @@ def process_pose(complex_path, source, name_tag, work_dir, archive_dir, pdb_id, 
     ensure_dir(work_dir)
     t0 = tick()
     try:
-        if source in ('gnina', 'rosetta'):
+        if source == 'rosetta':
             prot_pdb, lig_mol = extract_protein_and_ligand_from_complex_pdb(use_path, work_dir)
+        elif source == 'gnina':
+            # gnina poses are ligand-only files; require caller to provide the receptor PDB path
+            if prot_path is None:
+                raise ValueError('prot_path must be provided for gnina poses (they are ligand-only)')
+            prot_pdb = prot_path
+            # ensure we have an uncompressed PDB ligand (convert if needed)
+            lig_pdb_tmp = os.path.join(work_dir, 'gnina_ligand_for_infer.pdb')
+            # convert or gunzip picture in caller (preferred). Here use obabel as fallback:
+            if use_path.endswith('.pdb') and not use_path.endswith('.gz'):
+                lig_pdb_for_infer = use_path
+            else:
+                # try convert gz/pdbqt -> pdb
+                if use_path.endswith('.gz'):
+                    use_path = gunzip_to_tmp(use_path)
+                    tmp_cleanup = use_path
+                if use_path.lower().endswith('.pdbqt'):
+                    subprocess.run(['obabel', '-ipdbqt', use_path, '-O', lig_pdb_tmp], check=True)
+                    lig_pdb_for_infer = lig_pdb_tmp
+                    tmp_cleanup = lig_pdb_tmp if tmp_cleanup is None else (tmp_cleanup, lig_pdb_tmp)
+                else:
+                    lig_pdb_for_infer = use_path
+            lig_mol = Chem.MolFromPDBFile(lig_pdb_for_infer, removeHs=False)
+            if lig_mol is None:
+                lig_mol = Chem.MolFromPDBFile(lig_pdb_for_infer, removeHs=True)
+            if lig_mol is None:
+                raise ValueError('RDKit failed to parse gnina ligand after conversion')
         elif source == 'boltz2':
             prot_pdb, lig_mol = extract_protein_and_ligand_from_complex_cif(use_path, work_dir)
         else:
@@ -383,7 +434,7 @@ def main():
     parser.add_argument('--base_dir', type=str, default='/mnt/research/woldring_lab/Members/Eaves/plip-plop/data')
     args = parser.parse_args()
     
-    pdb_id = args.pdb_id
+    pdb_id = args.pdb_id.lower()
     n_poses = args.n_poses
     index_file = args.index_file
     scaler_fpath = args.scaler_fpath
@@ -391,7 +442,7 @@ def main():
     base_dir = args.base_dir
     
     df = pd.read_csv(index_file)
-    if args.pdb_id not in set(df['pdb_id'].unique()):
+    if pdb_id not in set(df['pdb_id'].unique()):
         raise SystemExit(f'PDB id {args.pdb_id} not found in index')
     pdb_df = df[df['pdb_id'] == pdb_id]
     out_csv, timings_log = make_pdb_paths(pdb_id)
@@ -406,19 +457,17 @@ def main():
         lig_pdb = os.path.splitext(ligand_sdf)[0] + '.pdb'
         if not os.path.exists(lig_pdb):
             ok = sdf_to_pdb(ligand_sdf, lig_pdb)
-        if not ok:
-            print(f'[WARNING] Could not convert crystal sdf to pdb for {pdb_id}. Skipping.')
-        else:
-            name = f'{pdb_id}-crystal'
-            try:
-                t0 = tick()
-                onionnet2_predict(protein_pdb, lig_pdb, scaler_fpath, model_fpath, out_csv, name)
-                dt = time.perf_counter() - t0
-                log_timing(timings_log, pdb_id, 'crystal', name, 'onionnet2_infer', dt)
-            except Exception as e:
-                print(f'[WARNING] onionnet2 failed for crystal {pdb_id}: {e}')
-    else:
-        print(f'[WARNING] missing crystal files for {pdb_id}')
+            if not ok:
+                print(f'[WARNING] Could not convert crystal sdf to pdb for {pdb_id}. Skipping.')
+                return
+    name = f'{pdb_id}-crystal'
+    try:
+        t0 = tick()
+        onionnet2_predict(protein_pdb, lig_pdb, scaler_fpath, model_fpath, out_csv, name)
+        dt = time.perf_counter() - t0
+        log_timing(timings_log, pdb_id, 'crystal', name, 'onionnet2_infer', dt)
+    except Exception as e:
+        print(f'[WARNING] onionnet2 failed for crystal {pdb_id}: {e}')
 
     # docked sources
     sources = ['gnina', 'rosetta', 'boltz2']
@@ -468,7 +517,7 @@ def main():
                     name = f'{pdb_id}-gnina-{pose_id}'
                     work_dir = os.path.join(outdir, pose_id)
                     try:
-                        process_pose(pose, 'gnina', name, work_dir, archive_dir, pdb_id, out_csv=out_csv, timings_log=timings_log, scaler_fpath=scaler_fpath, model_fpath=model_fpath, source_tar_path=tar_path)
+                        process_pose(pose, 'gnina', name, work_dir, archive_dir, pdb_id, out_csv=out_csv, timings_log=timings_log, scaler_fpath=scaler_fpath, model_fpath=model_fpath, source_tar_path=tar_path, prot_path=protein_pdb)
                     except Exception as e:
                         print(f'[WARNING] failed gnina {name}: {e}')
 
