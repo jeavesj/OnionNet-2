@@ -321,56 +321,56 @@ def process_pose(complex_path, source, name_tag, work_dir, archive_dir, pdb_id, 
 
     ensure_dir(work_dir)
     t0 = tick()
-    try:
-        if source == 'rosetta':
-            prot_pdb, lig_mol = extract_protein_and_ligand_from_complex_pdb(use_path, work_dir)
-        elif source == 'gnina':
-            # gnina poses are ligand-only files; require caller to provide the receptor PDB path
-            if prot_path is None:
-                raise ValueError('prot_path must be provided for gnina poses (they are ligand-only)')
-            prot_pdb = prot_path
-            # ensure we have an uncompressed PDB ligand (convert if needed)
-            lig_pdb_tmp = os.path.join(work_dir, 'gnina_ligand_for_infer.pdb')
-            # convert or gunzip picture in caller (preferred). Here use obabel as fallback:
-            if use_path.endswith('.pdb') and not use_path.endswith('.gz'):
-                lig_pdb_for_infer = use_path
-            else:
-                # try convert gz/pdbqt -> pdb
-                if use_path.endswith('.gz'):
-                    use_path = gunzip_to_tmp(use_path)
-                    tmp_cleanup = use_path
-                if use_path.lower().endswith('.pdbqt'):
-                    subprocess.run(['obabel', '-ipdbqt', use_path, '-O', lig_pdb_tmp], check=True)
-                    lig_pdb_for_infer = lig_pdb_tmp
-                    tmp_cleanup = lig_pdb_tmp if tmp_cleanup is None else (tmp_cleanup, lig_pdb_tmp)
-                else:
-                    lig_pdb_for_infer = use_path
-            lig_mol = Chem.MolFromPDBFile(lig_pdb_for_infer, removeHs=False)
-            if lig_mol is None:
-                lig_mol = Chem.MolFromPDBFile(lig_pdb_for_infer, removeHs=True)
-            if lig_mol is None:
-                raise ValueError('RDKit failed to parse gnina ligand after conversion')
-        elif source == 'boltz2':
-            prot_pdb, lig_mol = extract_protein_and_ligand_from_complex_cif(use_path, work_dir)
+    # try:
+    if source == 'rosetta':
+        prot_pdb, lig_mol = extract_protein_and_ligand_from_complex_pdb(use_path, work_dir)
+    elif source == 'gnina':
+        # gnina poses are ligand-only files; require caller to provide the receptor PDB path
+        if prot_path is None:
+            raise ValueError('prot_path must be provided for gnina poses (they are ligand-only)')
+        prot_pdb = prot_path
+        # ensure we have an uncompressed PDB ligand (convert if needed)
+        lig_pdb_tmp = os.path.join(work_dir, 'gnina_ligand_for_infer.pdb')
+        # convert or gunzip picture in caller (preferred). Here use obabel as fallback:
+        if use_path.endswith('.pdb') and not use_path.endswith('.gz'):
+            lig_pdb_for_infer = use_path
         else:
-            raise ValueError('unknown source for pose processing')
-        dt = time.perf_counter() - t0
-        log_timing(timings_log, pdb_id, source, name_tag, 'split_complex', dt)
-    except Exception as e:
-        if tmp_cleanup and os.path.exists(tmp_cleanup):
-            os.remove(tmp_cleanup)
-        raise
+            # try convert gz/pdbqt -> pdb
+            if use_path.endswith('.gz'):
+                use_path = gunzip_to_tmp(use_path)
+                tmp_cleanup = use_path
+            if use_path.lower().endswith('.pdbqt'):
+                subprocess.run(['obabel', '-ipdbqt', use_path, '-O', lig_pdb_tmp], check=True)
+                lig_pdb_for_infer = lig_pdb_tmp
+                tmp_cleanup = lig_pdb_tmp if tmp_cleanup is None else (tmp_cleanup, lig_pdb_tmp)
+            else:
+                lig_pdb_for_infer = use_path
+        lig_mol = Chem.MolFromPDBFile(lig_pdb_for_infer, removeHs=False)
+        if lig_mol is None:
+            lig_mol = Chem.MolFromPDBFile(lig_pdb_for_infer, removeHs=True)
+        if lig_mol is None:
+            raise ValueError('RDKit failed to parse gnina ligand after conversion')
+    elif source == 'boltz2':
+        prot_pdb, lig_mol = extract_protein_and_ligand_from_complex_cif(use_path, work_dir)
+    else:
+        raise ValueError('unknown source for pose processing')
+    dt = time.perf_counter() - t0
+    log_timing(timings_log, pdb_id, source, name_tag, 'split_complex', dt)
+    # except Exception as e:
+    #     if tmp_cleanup and os.path.exists(tmp_cleanup):
+    #         os.remove(tmp_cleanup)
+    #     raise
 
     sdf_path, lig_pdb_path = write_ligand_files(lig_mol, work_dir, 'ligand_from_complex')
 
-    try:
-        t1 = tick()
-        onionnet2_predict(prot_pdb, lig_pdb_path, scaler_fpath, model_fpath, out_csv, name_tag)
-        dt_inf = time.perf_counter() - t1
-        log_timing(timings_log, pdb_id, source, name_tag, 'onionnet2_infer', dt_inf)
-    finally:
-        if tmp_cleanup and os.path.exists(tmp_cleanup):
-            os.remove(tmp_cleanup)
+    # try:
+    t1 = tick()
+    onionnet2_predict(prot_pdb, lig_pdb_path, scaler_fpath, model_fpath, out_csv, name_tag)
+    dt_inf = time.perf_counter() - t1
+    log_timing(timings_log, pdb_id, source, name_tag, 'onionnet2_infer', dt_inf)
+    # finally:
+    #     if tmp_cleanup and os.path.exists(tmp_cleanup):
+    #         os.remove(tmp_cleanup)
 
     # per-pose archive of pose + intermediates for your own records
     t_arch = tick()
@@ -378,19 +378,19 @@ def process_pose(complex_path, source, name_tag, work_dir, archive_dir, pdb_id, 
     dt_arch = time.perf_counter() - t_arch
     log_timing(timings_log, pdb_id, source, name_tag, 'archive_with_pose', dt_arch)
     
-    for f in (prot_pdb, sdf_path, lig_pdb_path):
-        try:
-            if f and os.path.exists(f):
-                os.remove(f)
-        except Exception as e:
-            print(f'[WARNING] failed to remove intermediate {f}: {e}')
+    # for f in (prot_pdb, sdf_path, lig_pdb_path):
+    #     try:
+    #         if f and os.path.exists(f):
+    #             os.remove(f)
+    #     except Exception as e:
+    #         print(f'[WARNING] failed to remove intermediate {f}: {e}')
             
     # clean up per-pose working directory after we are done
-    try:
-        if os.path.isdir(work_dir):
-            shutil.rmtree(work_dir)
-    except Exception as e:
-        print(f'[WARNING] failed to remove work dir {work_dir}: {e}')
+    # try:
+    #     if os.path.isdir(work_dir):
+    #         shutil.rmtree(work_dir)
+    # except Exception as e:
+    #     print(f'[WARNING] failed to remove work dir {work_dir}: {e}')
 
     return {'name': name_tag, 'tar': tar_path, 'rec': prot_pdb, 'lig_sdf': sdf_path, 'lig_pdb': lig_pdb_path}
 
